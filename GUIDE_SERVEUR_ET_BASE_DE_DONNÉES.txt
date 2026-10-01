@@ -1,0 +1,451 @@
+================================================================================
+       ORGANIZ'ASSO — GUIDE COMPLET DU SERVEUR ET DE LA BASE DE DONNÉES
+       LU3IN017 Technologies du Web — KAOUANE Walid / KEDDARA Jalil
+================================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. ARCHITECTURE GLOBALE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Le projet est découpé en deux parties qui fonctionnent séparément :
+
+    ┌─────────────────────────────────────────────────────────────┐
+    │  NAVIGATEUR (port 5173)        SERVEUR (port 3000)          │
+    │                                                             │
+    │  React (client)    ←──HTTP──→  Express (Node.js)           │
+    │  Vite (dev server)             │                            │
+    │                                ↓                            │
+    │                            MongoDB (port 27017)             │
+    └─────────────────────────────────────────────────────────────┘
+
+- Le CLIENT React tourne sur le port 5173 (via Vite)
+- Le SERVEUR Express tourne sur le port 3000
+- La BASE DE DONNÉES MongoDB tourne sur le port 27017
+- Le client envoie des requêtes HTTP à /api/... → Vite les redirige vers le
+  serveur Express grâce à un "proxy" configuré dans vite.config.js
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. PRÉREQUIS — CE QU'IL FAUT INSTALLER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Avant de pouvoir lancer le projet, vous devez avoir installé :
+
+a) Node.js (version 18 ou plus récente)
+   → https://nodejs.org
+   → Vérifier : ouvrir un terminal et taper : node --version
+
+b) MongoDB Community Server (version 6 ou 7)
+   → https://www.mongodb.com/try/download/community
+   → Installer en tant que service Windows (il démarrera automatiquement)
+   → Vérifier : mongosh --version
+
+c) npm (installé automatiquement avec Node.js)
+   → Vérifier : npm --version
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. COMMENT LANCER LE PROJET (ÉTAPE PAR ÉTAPE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ÉTAPE 1 — Vérifier que MongoDB est en cours d'exécution
+────────────────────────────────────────────────────────
+  MongoDB doit tourner en arrière-plan. Sur Windows, il est en général
+  installé comme un service et démarre automatiquement.
+
+  Pour vérifier, ouvrir un terminal et taper :
+      mongosh
+  Si vous voyez un prompt mongosh>, c'est bon. Tapez "exit" pour quitter.
+
+  Si MongoDB n'est pas lancé, ouvrir les Services Windows (services.msc)
+  et démarrer "MongoDB Server".
+
+ÉTAPE 2 — Lancer le serveur Express (terminal 1)
+─────────────────────────────────────────────────
+  Ouvrir un terminal (PowerShell ou cmd) et taper :
+
+      cd "C:\Users\Walid\Desktop\web projet\organiz-asso\server"
+      npm install
+      npm run dev
+
+  Vous devriez voir :
+      Connecté à MongoDB - base : organiz_asso
+      Base de données peuplée avec succès !
+      Serveur Organiz'Asso démarré sur http://localhost:3000
+
+  IMPORTANT : La première fois, "npm install" télécharge toutes les
+  bibliothèques (express, mongodb, bcrypt, etc.). Cela peut prendre
+  quelques secondes. Les fois suivantes, ce n'est plus nécessaire.
+
+ÉTAPE 3 — Lancer le client React (terminal 2)
+──────────────────────────────────────────────
+  Ouvrir un DEUXIÈME terminal et taper :
+
+      cd "C:\Users\Walid\Desktop\web projet\organiz-asso\client"
+      npm install
+      npm run dev
+
+  Vous devriez voir :
+      VITE v5.x.x  ready in ... ms
+      ➜  Local:   http://localhost:5173/
+
+ÉTAPE 4 — Ouvrir le navigateur
+────────────────────────────────
+  Aller sur : http://localhost:5173
+
+  Le site est maintenant fonctionnel !
+
+  Comptes disponibles dès le démarrage :
+  ┌──────────┬─────────────┬───────────────────────────┐
+  │ Login    │ Mot de passe│ Rôle                      │
+  ├──────────┼─────────────┼───────────────────────────┤
+  │ admin    │ admin123    │ Administrateur             │
+  │ alice    │ motdepasse  │ Membre actif               │
+  │ bob      │ motdepasse  │ Membre actif               │
+  │ charlie  │ motdepasse  │ Inscription en attente     │
+  └──────────┴─────────────┴───────────────────────────┘
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. FONCTIONNEMENT DU SERVEUR EXPRESS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Le serveur est un programme Node.js qui utilise la bibliothèque Express.
+Il fonctionne comme un intermédiaire entre le navigateur et la base de données.
+
+DÉMARRAGE (server.js)
+─────────────────────
+Quand on lance "npm run dev", voici ce qui se passe dans l'ordre :
+
+  1. Le serveur configure Express (middlewares, routes)
+  2. Il se connecte à MongoDB via connectDB()
+  3. Il peuple la base si elle est vide via populateDB()
+  4. Il commence à écouter sur le port 3000
+
+MIDDLEWARES
+───────────
+Un middleware est une fonction qui s'exécute sur CHAQUE requête avant
+d'arriver à la route. Voici ceux utilisés :
+
+  app.use(cors(...))
+  → Autorise le navigateur (port 5173) à faire des requêtes vers le
+    serveur (port 3000). Sans ça, le navigateur bloquerait les requêtes
+    pour des raisons de sécurité (politique CORS).
+
+  app.use(express.json())
+  → Permet au serveur de lire le corps JSON des requêtes POST/PUT.
+    Sans ça, req.body serait undefined.
+
+  app.use(express.urlencoded({ extended: true }))
+  → Même chose pour les formulaires HTML classiques.
+
+  app.use(session({ ... }))
+  → Gère les sessions utilisateur via des cookies.
+    Quand quelqu'un se connecte, le serveur crée une session avec son
+    identité. À chaque requête suivante, le cookie est envoyé et le
+    serveur sait qui fait la demande.
+
+ROUTES API
+──────────
+Le serveur expose des "routes" — des URL qui répondent à des actions :
+
+  /api/auth/...     → Authentification (connexion, inscription, déconnexion)
+  /api/messages/... → Messages du forum, likes, signalements, recherche
+  /api/users/...    → Gestion des utilisateurs (réservé admin)
+
+SESSIONS ET AUTHENTIFICATION
+────────────────────────────
+Le système utilise des sessions côté serveur :
+
+  1. L'utilisateur envoie POST /api/auth/login avec {login, password}
+  2. Le serveur vérifie le mot de passe avec bcrypt.compare()
+  3. Si correct, il stocke les infos dans req.session.user
+  4. Le serveur envoie un cookie "connect.sid" au navigateur
+  5. À chaque requête suivante, le navigateur renvoie ce cookie
+  6. Le serveur retrouve la session grâce au cookie → req.session.user existe
+  7. Si req.session.user est undefined → utilisateur non connecté → 401
+
+PROTECTION DES ROUTES
+─────────────────────
+Certaines routes vérifient que l'utilisateur est connecté ou admin :
+
+  function requireAuth(req, res, next) {
+    if (!req.session.user) return res.status(401).json({ error: '...' });
+    next(); // passe à la suite
+  }
+
+  function requireAdmin(req, res, next) {
+    if (!req.session.user?.isAdmin) return res.status(403).json({ error: '...' });
+    next();
+  }
+
+Ces fonctions sont utilisées comme middleware sur les routes protégées.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. LA BASE DE DONNÉES MONGODB
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+POURQUOI MONGODB (ET PAS SQL) ?
+────────────────────────────────
+MongoDB est une base de données "NoSQL" orientée documents. Au lieu de
+tables avec des colonnes fixes, on stocke des documents JSON flexibles.
+
+  Avantages pour ce projet :
+  - Les documents JSON s'intègrent naturellement avec JavaScript/Node.js
+  - Pas besoin de schéma rigide (on peut ajouter des champs librement)
+  - Parfait pour des données comme les messages de forum
+
+  IMPORTANT (règle du cours) : On n'utilise PAS Mongoose.
+  On utilise le driver MongoDB natif pour Node.js directement.
+
+CONNEXION À MONGODB (db/connection.js)
+───────────────────────────────────────
+  const { MongoClient } = require('mongodb');
+  const client = new MongoClient('mongodb://localhost');
+  await client.connect();
+  const db = client.db('organiz_asso');
+
+  - L'URL 'mongodb://localhost' pointe vers MongoDB sur le port 27017
+  - 'organiz_asso' est le nom de la base de données créée automatiquement
+  - Le client est gardé en mémoire et réutilisé pour toutes les requêtes
+
+COLLECTIONS (équivalent des tables SQL)
+────────────────────────────────────────
+La base "organiz_asso" contient 2 collections :
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │ COLLECTION : users                                          │
+  │─────────────────────────────────────────────────────────────│
+  │ _id          : ObjectId (identifiant unique auto-généré)    │
+  │ firstName    : String   (prénom)                            │
+  │ lastName     : String   (nom)                               │
+  │ login        : String   (identifiant unique de connexion)   │
+  │ password     : String   (mot de passe hashé avec bcrypt)    │
+  │ isAdmin      : Boolean  (true = administrateur)             │
+  │ status       : String   ('pending', 'active', 'refused')    │
+  │ createdAt    : Date     (date d'inscription)                │
+  └─────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │ COLLECTION : messages                                       │
+  │─────────────────────────────────────────────────────────────│
+  │ _id           : ObjectId (identifiant unique)               │
+  │ content       : String   (contenu du message)               │
+  │ authorId      : ObjectId (référence vers users._id)         │
+  │ authorLogin   : String   (login copié pour affichage rapide)│
+  │ authorFirstName: String  (prénom copié)                     │
+  │ authorLastName: String   (nom copié)                        │
+  │ authorIsAdmin : Boolean  (admin au moment de l'envoi)       │
+  │ forumType     : String   ('ouvert', 'ferme', 'prive')       │
+  │ parentId      : ObjectId ou null (si c'est un commentaire)  │
+  │ recipientId   : ObjectId ou null (pour messages privés)     │
+  │ recipientLogin: String   ou null (login du destinataire)    │
+  │ likes         : [ObjectId] (tableau des user_id qui ont liké)│
+  │ reports       : [{userId, reason, createdAt}] (signalements)│
+  │ createdAt     : Date     (date d'envoi)                     │
+  └─────────────────────────────────────────────────────────────┘
+
+COMMENT LES COLLECTIONS SONT LIÉES
+────────────────────────────────────
+  - messages.authorId → users._id (qui a écrit le message)
+  - messages.parentId → messages._id (si c'est une réponse à un message)
+  - messages.recipientId → users._id (destinataire d'un message privé)
+  - messages.likes[] → users._id[] (qui a aimé le message)
+
+EXEMPLES D'OPÉRATIONS MONGODB UTILISÉES
+─────────────────────────────────────────
+  Trouver un utilisateur :
+    db.collection('users').findOne({ login: 'alice' })
+
+  Trouver tous les messages du forum ouvert :
+    db.collection('messages').find({ forumType: 'ouvert', parentId: null })
+                             .sort({ createdAt: -1 })
+                             .toArray()
+
+  Ajouter un like à un message :
+    db.collection('messages').updateOne(
+      { _id: msgId },
+      { $push: { likes: userId } }
+    )
+
+  Retirer un like :
+    db.collection('messages').updateOne(
+      { _id: msgId },
+      { $pull: { likes: userId } }
+    )
+
+  Valider une inscription :
+    db.collection('users').updateOne(
+      { _id: userId, status: 'pending' },
+      { $set: { status: 'active' } }
+    )
+
+SÉCURITÉ DES MOTS DE PASSE (bcrypt)
+────────────────────────────────────
+Les mots de passe ne sont JAMAIS stockés en clair dans la base.
+On utilise bcrypt, un algorithme de hachage sécurisé :
+
+  À l'inscription :
+    const hash = await bcrypt.hash(password, 10);
+    // "10" = nombre de "rounds" de calcul (plus c'est élevé, plus c'est lent
+    //  à craquer par force brute)
+    // hash ressemble à : "$2b$10$X7kVz8..."
+
+  À la connexion :
+    const ok = await bcrypt.compare(motDePasseSaisi, hashDansDB);
+    // Retourne true ou false
+
+VISUALISER LA BASE DE DONNÉES
+──────────────────────────────
+Pour voir le contenu de la base en direct, vous pouvez utiliser :
+
+  a) MongoDB Compass (interface graphique officielle)
+     → https://www.mongodb.com/try/download/compass
+     → Connexion : mongodb://localhost:27017
+     → Puis naviguer vers organiz_asso → users ou messages
+
+  b) mongosh (en ligne de commande)
+     → Dans un terminal : mongosh
+     → use organiz_asso
+     → db.users.find().pretty()
+     → db.messages.find().pretty()
+
+RÉINITIALISER LA BASE DE DONNÉES
+──────────────────────────────────
+Si vous voulez repartir de zéro (nouvelles données initiales) :
+
+  Dans mongosh :
+    use organiz_asso
+    db.users.deleteMany({})
+    db.messages.deleteMany({})
+
+  Puis redémarrer le serveur → populateDB() se relancera automatiquement.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. TOUTES LES ROUTES API DISPONIBLES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+AUTH (routes/auth.js)
+──────────────────────
+  POST   /api/auth/login        Connexion {login, password}
+                                → Crée la session, retourne les infos user
+                                → 401 si mauvais mdp, 403 si pending/refused
+
+  POST   /api/auth/logout       Déconnexion
+                                → Détruit la session, efface le cookie
+
+  POST   /api/auth/signup       Inscription {firstName, lastName, login, password, passwordConfirm}
+                                → Crée un compte status='pending'
+                                → 409 si le login existe déjà
+
+  GET    /api/auth/me           Récupérer la session en cours
+                                → Retourne les infos si connecté, 401 sinon
+
+MESSAGES (routes/messages.js)
+──────────────────────────────
+  GET    /api/messages/public          Forum ouvert (sans connexion)
+  GET    /api/messages?type=ouvert     Forum ouvert (connecté)
+  GET    /api/messages?type=ferme      Forum fermé (admin seulement)
+  GET    /api/messages/private         Mes messages privés (connecté)
+  GET    /api/messages/search?q=&author=&from=&to=    Recherche
+  GET    /api/messages/profile/:login  Messages d'un utilisateur
+  GET    /api/messages/:id/comments    Commentaires d'un message
+
+  POST   /api/messages                 Créer un message {content, forumType, parentId}
+  POST   /api/messages/private         Envoyer un MP {content, recipientLogin}
+  POST   /api/messages/:id/like        Liker / unliker un message
+  POST   /api/messages/:id/report      Signaler {reason}
+
+  DELETE /api/messages/:id             Supprimer un message (auteur ou admin)
+
+USERS (routes/users.js)
+────────────────────────
+  GET    /api/users/pending    Liste des inscriptions en attente (admin)
+  GET    /api/users            Liste des membres actifs (admin)
+  GET    /api/users/:login     Infos d'un utilisateur (connecté)
+  PUT    /api/users/:id/validate  Valider une inscription (admin)
+  PUT    /api/users/:id/refuse    Refuser une inscription (admin)
+
+CODES DE RETOUR HTTP UTILISÉS
+───────────────────────────────
+  200 OK           → Succès, données retournées
+  201 Created      → Ressource créée avec succès
+  400 Bad Request  → Données manquantes ou invalides
+  401 Unauthorized → Non connecté
+  403 Forbidden    → Connecté mais pas les droits
+  404 Not Found    → Ressource introuvable
+  409 Conflict     → Conflit (ex: login déjà utilisé)
+  500 Server Error → Erreur interne du serveur
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. FLUX DE DONNÉES TYPIQUE (EXEMPLE : CONNEXION)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. L'utilisateur remplit le formulaire Login.jsx et clique "Se connecter"
+  2. React appelle api.post('/auth/login', { login: 'alice', password: '...' })
+  3. Vite redirige vers http://localhost:3000/api/auth/login (proxy)
+  4. Express reçoit la requête, passe par les middlewares (cors, json, session)
+  5. La route POST /api/auth/login s'exécute :
+       - Cherche 'alice' dans MongoDB : db.collection('users').findOne({login:'alice'})
+       - Vérifie le mot de passe avec bcrypt.compare()
+       - Crée la session : req.session.user = { id, login, firstName, ... }
+       - Répond avec les infos de l'utilisateur en JSON
+  6. Vite transmet la réponse au navigateur
+  7. React reçoit les données → setUser(data) → setView('home')
+  8. Le composant Home s'affiche avec l'utilisateur connecté
+  9. Le cookie "connect.sid" est maintenant dans le navigateur
+  10. Toutes les requêtes suivantes incluent ce cookie automatiquement
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. DÉPENDANCES ET LEURS RÔLES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SERVEUR (server/package.json)
+──────────────────────────────
+  express          → Framework web pour créer des routes HTTP facilement
+  express-session  → Gestion des sessions utilisateur via cookies
+  cors             → Autorise les requêtes cross-origin (client ↔ serveur)
+  mongodb          → Driver officiel MongoDB pour Node.js (pas Mongoose !)
+  bcrypt           → Hachage sécurisé des mots de passe
+  nodemon (dev)    → Redémarre le serveur automatiquement quand on modifie un fichier
+
+CLIENT (client/package.json)
+─────────────────────────────
+  react            → Bibliothèque UI pour créer des composants
+  react-dom        → Intégration de React dans le DOM du navigateur
+  axios            → Client HTTP pour faire des requêtes vers l'API
+  vite (dev)       → Serveur de développement ultra-rapide pour React
+  @vitejs/plugin-react  → Plugin Vite pour supporter JSX/React
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. PROBLÈMES FRÉQUENTS ET SOLUTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PROBLÈME : "MongoServerError: connect ECONNREFUSED"
+SOLUTION : MongoDB n'est pas lancé. Ouvrir services.msc et démarrer MongoDB.
+
+PROBLÈME : "Error: Cannot find module 'express'"
+SOLUTION : Les dépendances ne sont pas installées. Lancer "npm install" dans
+           le dossier server/.
+
+PROBLÈME : Le navigateur affiche "Network Error" ou les requêtes échouent
+SOLUTION : Vérifier que le serveur Express tourne bien sur le port 3000.
+           Vérifier que le proxy dans vite.config.js pointe vers localhost:3000.
+
+PROBLÈME : La session ne persiste pas (déconnexion à chaque rechargement)
+SOLUTION : Vérifier que withCredentials: true est bien dans api.js et que
+           credentials: true est dans la config cors du serveur.
+
+PROBLÈME : "CORS error" dans la console du navigateur
+SOLUTION : Vérifier que l'origin dans la config CORS est 'http://localhost:5173'.
+
+PROBLÈME : Mot de passe oublié pour un compte de test
+SOLUTION : Supprimer la base et redémarrer le serveur (voir section 5).
+
+================================================================================

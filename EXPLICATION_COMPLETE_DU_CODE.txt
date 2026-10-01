@@ -1,0 +1,847 @@
+================================================================================
+      ORGANIZ'ASSO — EXPLICATION DÉTAILLÉE DE CHAQUE FICHIER CRÉÉ
+      LU3IN017 Technologies du Web — KAOUANE Walid / KEDDARA Jalil
+================================================================================
+
+Ce document explique fichier par fichier tout ce qui a été créé, pourquoi
+chaque fichier existe, ce qu'il fait concrètement et comment il s'intègre
+dans le reste du projet.
+
+
+════════════════════════════════════════════════════════════════════════════════
+                              PARTIE 1 : SERVEUR
+════════════════════════════════════════════════════════════════════════════════
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : server/package.json
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Déclarer les bibliothèques dont le serveur a besoin.
+
+Ce fichier est le "carnet d'adresses" des dépendances du projet serveur.
+Quand on lance "npm install", npm lit ce fichier et télécharge toutes les
+bibliothèques listées dans "dependencies".
+
+POURQUOI CES DÉPENDANCES :
+  - "express"         → Sans Express, on devrait écrire du Node.js pur pour
+                        gérer chaque requête HTTP manuellement. Express simplifie
+                        énormément la création de routes et de middlewares.
+  - "express-session" → Gère automatiquement les cookies de session. Sans elle,
+                        il faudrait implémenter la gestion de session à la main.
+  - "cors"            → Bloque par défaut les requêtes d'une origine différente.
+                        On doit l'autoriser explicitement entre port 5173 et 3000.
+  - "mongodb"         → Le driver officiel pour parler à MongoDB depuis Node.js.
+                        Le cours interdit Mongoose, donc on utilise ce driver natif.
+  - "bcrypt"          → Un standard de l'industrie pour hasher les mots de passe.
+                        On ne peut JAMAIS stocker les mots de passe en clair.
+  - "nodemon" (dev)   → Outil de développement qui surveille les fichiers et
+                        redémarre le serveur automatiquement après chaque sauvegarde.
+                        Évite de relancer "node server.js" à la main à chaque fois.
+
+Les scripts "start" et "dev" définissent ce que font "npm start" et "npm run dev".
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : server/server.js
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Point d'entrée du serveur. Configure tout et démarre l'écoute.
+
+C'est le fichier racine du serveur. Il est le premier à s'exécuter quand
+on lance "npm run dev". Il assemble toutes les pièces du serveur.
+
+CE QU'IL FAIT CONCRÈTEMENT :
+
+  1) Importe et configure Express :
+     const app = express() → crée l'application serveur
+
+  2) Configure CORS :
+     app.use(cors({ origin: 'http://localhost:5173', credentials: true }))
+     → Autorise uniquement le client React (port 5173) à contacter ce serveur
+     → "credentials: true" est indispensable pour que les cookies de session
+       soient transmis avec les requêtes Axios
+
+  3) Configure les parseurs :
+     app.use(express.json()) → lit le corps JSON des requêtes
+     app.use(express.urlencoded()) → lit les formulaires HTML
+
+  4) Configure les sessions :
+     app.use(session({ secret: '...', resave: false, saveUninitialized: false }))
+     → "secret" : clé secrète pour signer les cookies (à garder privée en prod)
+     → "resave: false" : ne re-sauvegarde pas la session si elle n'a pas changé
+     → "saveUninitialized: false" : ne crée pas de session vide
+     → "maxAge: 24h" : la session expire après 24 heures
+
+  5) Monte les routeurs sur leurs préfixes :
+     app.use('/api/auth', authRouter)     → toutes les routes auth commencent par /api/auth
+     app.use('/api/messages', messagesRouter)
+     app.use('/api/users', usersRouter)
+
+  6) Route 404 pour les URL inconnues
+
+  7) Fonction async start() :
+     → Se connecte d'abord à MongoDB (await connectDB())
+     → Peuple si vide (await populateDB())
+     → Puis seulement commence à écouter (app.listen(3000))
+     → Si MongoDB est indisponible, le serveur s'arrête (process.exit(1))
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : server/db/connection.js
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Gérer la connexion à MongoDB et la partager dans tout le serveur.
+
+PROBLÈME RÉSOLU : On ne veut pas se connecter à MongoDB à chaque requête
+(ce serait très lent). On se connecte une seule fois au démarrage et on
+réutilise cette connexion.
+
+PATTERN UTILISÉ ("module singleton") :
+  - Les variables "client" et "db" sont déclarées au niveau du module
+  - connectDB() les initialise une seule fois
+  - getDB() les retourne à chaque appel
+  - Comme Node.js met en cache les modules, getDB() retourne toujours
+    la même instance de connexion
+
+POURQUOI SÉPARER CE FICHIER DU RESTE :
+  Chaque fichier de route (auth.js, messages.js, users.js) a besoin
+  d'accéder à la base. Plutôt que de dupliquer le code de connexion partout,
+  on centralise ici et chacun importe getDB().
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : server/db/populate.js
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Remplir la base de données avec des données de test au premier démarrage.
+
+POURQUOI CE FICHIER EXISTE :
+  Sans données initiales, l'application serait vide et inutilisable pour
+  tester. Ce fichier crée automatiquement des utilisateurs et des messages
+  de démonstration pour pouvoir tester toutes les fonctionnalités dès le
+  premier lancement.
+
+CE QU'IL CRÉE :
+  - 1 administrateur (admin / admin123)
+  - 2 membres actifs (alice, bob)
+  - 1 utilisateur en attente de validation (charlie)
+  - 1 utilisateur refusé (diana) → pour tester ce cas d'usage
+  - Des messages dans le forum ouvert avec des réponses
+  - Des messages dans le forum fermé
+  - Des messages privés entre admin et alice
+
+GARDE-FOU IMPORTANT :
+  La première ligne vérifie si la base est déjà peuplée :
+    const usersCount = await db.collection('users').countDocuments();
+    if (usersCount > 0) return; // Ne peuple pas deux fois
+
+  Sans ça, chaque redémarrage du serveur créerait des doublons.
+
+BCRYPT POUR LES MOTS DE PASSE :
+  Chaque mot de passe est hashé avant insertion :
+    const hash = await bcrypt.hash('admin123', 10);
+  Le "10" signifie 2^10 = 1024 calculs → rend les attaques par force brute
+  très coûteuses en temps.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : server/routes/auth.js
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Gérer tout ce qui concerne l'authentification des utilisateurs.
+
+Ce fichier contient 4 routes cruciales pour la sécurité du site :
+
+POST /api/auth/login
+  → Reçoit {login, password} du formulaire React
+  → Cherche l'utilisateur dans MongoDB par son login
+  → Compare le mot de passe avec bcrypt.compare() (hash vs saisie)
+  → Vérifie le statut : si 'pending' → accès refusé (403), si 'refused' → 403
+  → Si tout est bon : crée req.session.user avec les infos de l'utilisateur
+  → Retourne les infos au client
+  POURQUOI : C'est la porte d'entrée du site. Sans ça, personne ne peut
+  accéder au forum.
+
+POST /api/auth/logout
+  → Détruit la session côté serveur avec req.session.destroy()
+  → Efface le cookie côté client avec res.clearCookie()
+  → Les deux sont nécessaires pour une déconnexion complète
+  POURQUOI : Sécurité. Sans déconnexion côté serveur, la session resterait
+  active même après fermeture du navigateur.
+
+POST /api/auth/signup
+  → Valide que tous les champs sont présents
+  → Vérifie que le login n'est pas déjà pris (findOne)
+  → Hashe le mot de passe
+  → Insère l'utilisateur avec status: 'pending'
+  → Retourne 201 Created
+  POURQUOI : Le statut 'pending' est essentiel. Un nouveau membre ne peut
+  pas accéder directement au forum. Un admin doit valider son compte.
+
+GET /api/auth/me
+  → Vérifie si req.session.user existe
+  → Si oui, retourne les infos → le client React sait que l'utilisateur est
+    déjà connecté (session persistée depuis une visite précédente)
+  POURQUOI : Quand l'utilisateur recharge la page, React perd son état.
+  Cette route permet de restaurer la session sans redemander le mot de passe.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : server/routes/messages.js
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Gérer tous les messages — forum, commentaires, privés, likes, signalements, recherche.
+
+C'est le fichier le plus important en volume car les messages sont au cœur
+du site. Il gère 11 routes différentes.
+
+FONCTION serializeMsg()
+  Convertit les ObjectId MongoDB (type spécial) en strings JavaScript
+  avant d'envoyer la réponse JSON. Sans ça, React reçoit des objets
+  illisibles au lieu de simples chaînes de caractères pour les IDs.
+
+GET /api/messages/public
+  → Retourne les messages du forum ouvert sans vérifier la session
+  → POURQUOI : Le forum est accessible en lecture même sans compte.
+    ForumPublic.jsx l'utilise pour afficher le forum aux visiteurs.
+
+GET /api/messages/private
+  → Retourne TOUS les messages où l'utilisateur est auteur OU destinataire
+  → $or: [{ authorId }, { recipientId }] → requête MongoDB avec opérateur "ou"
+  → POURQUOI : Pour construire toutes les conversations privées de l'utilisateur.
+
+GET /api/messages/search
+  → Construit dynamiquement un filtre MongoDB selon les paramètres de l'URL
+  → q → cherche dans le contenu avec $regex (expression régulière, insensible à la casse)
+  → author → cherche par login avec $regex
+  → from/to → filtre par date avec $gte (>=) et $lte (<=)
+  → Les non-admins ne voient que le forum ouvert dans les résultats
+  → POURQUOI : Permet une recherche multi-critères cumulable.
+
+GET /api/messages/profile/:login
+  → Retourne les messages publiés par un utilisateur spécifique
+  → POURQUOI : Affiche les messages sur la page Profil.
+
+ORDRE DES ROUTES IMPORTANT :
+  Les routes /public, /private, /search, /profile/:login DOIVENT être
+  définies AVANT /:id. Sinon Express interprèterait "search" comme un ID
+  et essaierait de créer un ObjectId avec la chaîne "search" → erreur.
+
+POST /api/messages
+  → Crée un message dans le forum ouvert ou fermé
+  → Vérifie que seuls les admins peuvent poster dans le forum fermé
+  → parentId non null → c'est un commentaire sur un message existant
+  → POURQUOI : Les commentaires et les messages principaux utilisent
+    la même collection. La distinction se fait via parentId.
+
+DELETE /api/messages/:id
+  → Vérifie que l'auteur ou un admin fait la demande
+  → Supprime le message ET ses commentaires (deleteMany avec $or)
+  → POURQUOI : Si on supprime un message principal, ses réponses
+    n'ont plus de sens. On les supprime aussi pour garder la cohérence.
+
+POST /api/messages/:id/like
+  → Vérifie si l'user a déjà liké (some() sur le tableau likes)
+  → Si oui : $pull (retire l'ObjectId du tableau)
+  → Si non : $push (ajoute l'ObjectId au tableau)
+  → Toggle : un seul bouton gère like ET unlike
+  → POURQUOI : Stocker les IDs des utilisateurs qui ont liké permet
+    de savoir précisément qui a liké, éviter les doublons, et afficher
+    l'état du bouton (liké ou non) pour chaque utilisateur.
+
+POST /api/messages/:id/report
+  → Vérifie qu'on n'a pas déjà signalé ce message
+  → Ajoute {userId, reason, date} dans le tableau reports du message
+  → POURQUOI : Les signalements sont stockés dans le message lui-même.
+    Un admin pourrait lister les messages signalés en cherchant ceux
+    dont reports.length > 0.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : server/routes/users.js
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Gérer les utilisateurs — listing et validation des inscriptions (admin).
+
+GET /api/users/pending
+  → Retourne uniquement les utilisateurs avec status = 'pending'
+  → Trié par date d'inscription (les plus anciens d'abord)
+  → POURQUOI : L'admin voit les inscriptions en attente dans l'ordre
+    d'arrivée pour les traiter équitablement.
+
+GET /api/users
+  → Retourne tous les membres actifs (status = 'active')
+  → POURQUOI : Permet à l'admin d'avoir une vue d'ensemble des membres.
+
+GET /api/users/:login
+  → Retourne les informations publiques d'un utilisateur
+  → Ne retourne PAS le mot de passe (on sélectionne les champs manuellement)
+  → POURQUOI : On exclut le mot de passe hashé de la réponse par sécurité.
+
+PUT /api/users/:id/validate et PUT /api/users/:id/refuse
+  → Utilisent $set: { status: 'active' } ou { status: 'refused' }
+  → Vérifient que matchedCount > 0 (l'utilisateur existait bien)
+  → POURQUOI : Quand un utilisateur inscrit se connecte, le serveur vérifie
+    son status. S'il est 'active', il peut accéder au forum.
+
+
+════════════════════════════════════════════════════════════════════════════════
+                              PARTIE 2 : CLIENT REACT
+════════════════════════════════════════════════════════════════════════════════
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/package.json
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Déclarer les dépendances du client React.
+
+  - "type": "module" → Le client utilise la syntaxe import/export (ESM)
+    au lieu de require() (CommonJS). C'est le standard moderne JavaScript.
+  - "react" et "react-dom" → Les bibliothèques cœur de React
+  - "axios" → Client HTTP promis-basé pour appeler l'API
+  - "vite" → Serveur de développement ultra-rapide (remplace Webpack)
+  - "@vitejs/plugin-react" → Plugin pour que Vite comprenne le JSX React
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/vite.config.js
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Configurer Vite — notamment le proxy vers le serveur.
+
+Le proxy est crucial :
+  server: {
+    proxy: {
+      '/api': { target: 'http://localhost:3000', changeOrigin: true }
+    }
+  }
+
+SANS proxy : quand React fait api.get('/api/auth/me'), le navigateur
+cherche http://localhost:5173/api/auth/me → qui n'existe pas sur le
+serveur Vite.
+
+AVEC proxy : Vite intercepte toute URL commençant par /api et la redirige
+vers http://localhost:3000/api/auth/me → le serveur Express répond.
+
+AVANTAGE : Les cookies de session fonctionnent correctement car du point de
+vue du navigateur, tout vient du même "serveur" (localhost:5173).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/api.js
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Instance Axios centralisée avec la configuration commune.
+
+  const api = axios.create({
+    baseURL: '/api',
+    withCredentials: true
+  });
+
+POURQUOI CE FICHIER :
+  Sans lui, chaque composant devrait écrire la configuration Axios
+  complète à chaque fois. Avec ce fichier, on importe "api" partout
+  et on a automatiquement :
+  - baseURL: '/api' → on écrit api.get('/auth/me') au lieu de
+    axios.get('http://localhost:3000/api/auth/me')
+  - withCredentials: true → le navigateur envoie automatiquement les
+    cookies de session avec chaque requête. SANS ça, la session ne
+    fonctionnerait pas du tout.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/main.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Point d'entrée de l'application React. Monte App dans le DOM.
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />)
+
+→ Trouve l'élément <div id="root"> dans index.html
+→ Y insère le composant App
+→ C'est l'unique endroit où React "prend le contrôle" du HTML
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/App.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Composant racine. Orchestre toute la navigation et l'état global.
+
+C'est le "chef d'orchestre" de l'application. Il contient :
+
+STATE GLOBAL :
+  - user : null ou l'objet utilisateur { id, login, firstName, lastName, isAdmin }
+  - view : la vue actuellement affichée ('loading', 'public', 'login',
+           'signup', 'pending', 'home')
+
+RESTAURATION DE SESSION (useEffect au montage) :
+  api.get('/auth/me')
+  → Si le serveur retourne les infos → l'utilisateur était déjà connecté
+    (cookie valide) → on passe directement à la vue 'home'
+  → Si 401 → pas de session → on affiche le forum public
+
+POURQUOI CET ÉTAT EST DANS APP ET PAS AILLEURS :
+  Toute l'application a besoin de savoir qui est connecté (user).
+  En React, l'état doit être dans l'ancêtre commun de tous les composants
+  qui en ont besoin. App.jsx est l'ancêtre de tous les composants → c'est
+  le bon endroit.
+
+NAVIGATION ENTRE VUES :
+  La SPA (Single Page Application) n'utilise pas React Router.
+  La navigation est gérée manuellement avec setView(). C'est plus simple
+  et correspond aux exigences du cours (pas de bibliothèque de routing).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/NavigationPanel.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : En-tête permanent affiché sur toutes les vues.
+
+Affiche le nom du site et, selon l'état de connexion :
+  - SI non connecté → boutons "Se connecter" et "S'inscrire"
+  - SI connecté → message de bienvenue + bouton "Se déconnecter" (via Logout)
+
+POURQUOI SÉPARER CE COMPOSANT :
+  Il est présent sur TOUTES les pages. En le séparant, on évite de le
+  réécrire dans chaque vue et on facilite sa maintenance.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/Login.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Formulaire de connexion avec identifiant et mot de passe.
+
+FONCTIONNEMENT :
+  1. L'utilisateur remplit les deux champs
+  2. handleSubmit(e) appelle e.preventDefault() pour ne pas recharger la page
+  3. api.post('/auth/login', { login, password }) envoie les données
+  4. Si succès → onLogin(res.data) → App met à jour user et change la vue
+  5. Si erreur → affiche le message d'erreur retourné par le serveur
+
+GESTION D'ÉTAT LOCAL :
+  - login, password → valeurs des champs
+  - error → message d'erreur à afficher
+  - loading → désactive le bouton pendant la requête
+
+POURQUOI "loading" :
+  Sans ça, l'utilisateur pourrait cliquer plusieurs fois et envoyer
+  plusieurs requêtes de connexion simultanément.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/Logout.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Bouton de déconnexion simple.
+
+Appelle POST /api/auth/logout et dans tous les cas (succès ou erreur réseau)
+appelle onLogout() pour déconnecter côté client.
+
+POURQUOI LE .catch() APPELLE AUSSI onLogout() :
+  Si le serveur est inaccessible, l'utilisateur doit quand même pouvoir
+  se "déconnecter" visuellement de l'interface.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/Signup.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Formulaire d'inscription avec 5 champs et validation côté client.
+
+CHAMPS : prénom, nom, identifiant, mot de passe, confirmation mot de passe
+
+VALIDATION CÔTÉ CLIENT (avant envoi au serveur) :
+  - Vérification que les deux mots de passe sont identiques
+  → Si différents : afficher l'erreur sans même appeler le serveur
+  → C'est une "validation optimiste" : on évite un aller-retour réseau
+    pour une erreur qu'on peut détecter localement
+
+PATTERN handleChange() :
+  Au lieu d'un useState par champ, on utilise un seul objet "form" et
+  une fonction handleChange générique qui met à jour le bon champ via
+  le name de l'input : setForm(prev => ({ ...prev, [e.target.name]: e.target.value }))
+
+APRÈS INSCRIPTION RÉUSSIE :
+  onSignupSuccess() → App change la vue vers 'pending' → SignupInProgress s'affiche
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/SignupInProgress.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Page d'attente affichée après une inscription.
+
+Informe l'utilisateur que son compte est en attente de validation admin.
+Propose un bouton de déconnexion pour qu'il puisse fermer sa session.
+
+POURQUOI CETTE PAGE EXISTE :
+  Si quelqu'un essaie de se connecter avec un compte 'pending', le serveur
+  retourne 403. Cette page est affichée après l'inscription pour gérer cette
+  période d'attente avec un message clair et une bonne expérience utilisateur.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/Home.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Composant central de l'application connectée. Gère la navigation interne.
+
+STATE : activeSection → détermine quelle section est affichée dans le contenu
+
+LAYOUT :
+  <div className="home-layout">
+    <UserBanner ... />    ← sidebar gauche permanente
+    <main>
+      {renderSection()}  ← contenu dynamique à droite
+    </main>
+  </div>
+
+renderSection() retourne le bon composant selon activeSection :
+  'forum-ouvert'   → <Forum forumType="ouvert" />
+  'forum-ferme'    → <Forum forumType="ferme" /> (admin uniquement)
+  'messages-prives'→ <MessagesPrives />
+  'recherche'      → <Recherche />
+  'profil'         → <Profile />
+  'validation'     → <ValidationInscription /> (admin uniquement)
+
+POURQUOI CE COMPOSANT ET PAS REACT ROUTER :
+  Pour une SPA simple sans URL bookmarkables, cette approche est suffisante
+  et conforme aux technologies vues en cours.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/UserBanner.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Sidebar de navigation persistante avec les infos de l'utilisateur.
+
+Affiche :
+  1. Le composant User (avatar + nom + login + badge admin)
+  2. La liste des liens de navigation (filtrés selon le rôle)
+
+FILTRAGE DES SECTIONS :
+  SECTIONS.filter(s => !s.adminOnly || user.isAdmin)
+  → "Forum fermé" et "Validations" sont cachés aux non-admins
+  → POURQUOI : On n'affiche pas les options auxquelles un utilisateur
+    n'a pas accès. L'interface s'adapte au rôle.
+
+BOUTON ACTIF :
+  className={`nav-item${activeSection === s.key ? ' active' : ''}`}
+  → Classe CSS différente selon si c'est la section active
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/User.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Afficher les informations d'un utilisateur avec avatar généré.
+
+L'avatar est généré automatiquement à partir de l'initiale du prénom :
+  const initiale = (user.firstName?.[0] || '?').toUpperCase()
+  → Pas besoin d'image, l'initiale s'affiche dans un cercle coloré
+
+Affiche aussi le badge Admin (composant AdminBadge) si l'utilisateur est admin.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/AdminBadge.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Afficher (ou non) le badge "Admin" rouge.
+
+if (!isAdmin) return null; → Ne rend rien si l'utilisateur n'est pas admin.
+
+POURQUOI CE COMPOSANT SÉPARÉ :
+  Il est utilisé à plusieurs endroits : User.jsx, Message.jsx, Comment.jsx.
+  En le séparant, on le définit une seule fois et on l'importe où on en a besoin.
+  C'est le principe DRY (Don't Repeat Yourself).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/Forum.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Afficher un forum (ouvert ou fermé) avec la liste des messages et le formulaire.
+
+Reçoit la prop "forumType" ('ouvert' ou 'ferme') → un seul composant gère
+les deux forums grâce à cette prop.
+
+useEffect avec [forumType] comme dépendance :
+  → Recharge les messages quand on change de forum (ouvert → fermé ou vice versa)
+
+DROIT DE POSTER :
+  const canPost = forumType === 'ouvert' || (forumType === 'ferme' && user.isAdmin)
+  → Dans le forum fermé, seul l'admin voit le formulaire de création
+  → Les membres voient les messages mais ne peuvent pas en créer
+
+handleNewMessage(msg) → Ajoute le nouveau message en tête de liste sans recharger
+  setMessages(prev => [msg, ...prev]) → "optimistic update"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/ForumPublic.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Forum ouvert en lecture seule pour les visiteurs non connectés.
+
+Appelle GET /api/messages/public → route sans authentification requise.
+Affiche les messages mais sans bouton like, répondre ou signaler.
+Affiche une bannière invitant à se connecter pour participer.
+
+POURQUOI SÉPARER DU FORUM NORMAL :
+  La logique est différente (pas de session, pas d'actions, pas de formulaire).
+  Mélanger les deux dans un seul composant l'aurait rendu plus complexe.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/MessageForm.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Formulaire réutilisable pour créer un message ou un commentaire.
+
+Reçoit les props :
+  - forumType → 'ouvert' ou 'ferme' (transmis à l'API)
+  - parentId → null pour un message principal, ID pour un commentaire
+  - onSubmit → callback appelé avec le nouveau message créé
+  - onCancel → callback pour annuler (optionnel)
+  - placeholder → texte d'aide personnalisable
+
+RÉUTILISATION :
+  Ce composant est utilisé dans Forum.jsx (nouveau message) ET dans
+  CommentList.jsx (nouveau commentaire). Même composant, props différentes.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/MessageList.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Afficher une liste de messages en déléguant à Message.jsx.
+
+Composant très simple — son rôle est de mapper un tableau de messages vers
+des composants Message. Il gère aussi la suppression en filtrant le tableau.
+
+Utilisé dans : Forum.jsx, Recherche.jsx, Profile.jsx.
+C'est du DRY : la logique d'affichage d'une liste est définie une seule fois.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/Message.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Afficher un message complet avec toutes ses actions.
+
+C'est le composant le plus riche de l'interface. Il orchestre :
+  - L'en-tête (auteur, login, badge admin, date)
+  - Le contenu textuel
+  - Les actions : LikeButton, bouton Commentaires, ReportButton, Supprimer
+  - Les commentaires (CommentList, dépliable)
+
+AFFICHAGE/MASQUAGE DES ACTIONS :
+  - "Signaler" → caché si c'est son propre message (user.id === message.authorId)
+  - "Supprimer" → visible uniquement pour l'auteur OU un admin
+  - "Commentaires" → toggle avec showComments state
+
+FORMATAGE DE DATE :
+  new Date(d).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' })
+  → Affiche la date en français : "10 janv. 2025, 14:30"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/LikeButton.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Bouton like/unlike avec compteur, indépendant pour chaque message.
+
+STATE LOCAL :
+  - liked → initialisé en vérifiant si currentUserId est dans initialLikes
+  - count → initialisé à initialLikes.length
+
+POURQUOI UN STATE LOCAL ET PAS DANS LE PARENT :
+  Chaque bouton gère son propre état. Liker le message 1 ne doit pas
+  déclencher un re-render de tous les autres messages. Le state local
+  optimise les performances.
+
+TOGGLE :
+  Après la réponse du serveur { liked: bool, count: number }, on met à
+  jour le state local → affichage immédiat sans recharger tous les messages.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/CommentList.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Charger et afficher les commentaires d'un message.
+
+Chargement paresseux ("lazy loading") :
+  Les commentaires ne sont chargés que quand l'utilisateur clique sur
+  "Commentaires ▼". useEffect déclenche GET /api/messages/:id/comments.
+  POURQUOI : Évite de charger TOUS les commentaires de TOUS les messages
+  dès l'ouverture du forum → performances bien meilleures.
+
+Affiche aussi le formulaire de réponse (MessageForm avec parentId=messageId).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/Comment.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Afficher un commentaire unique (composant "feuille" — pas d'enfants).
+
+Un commentaire est plus simple qu'un message :
+  - Pas de bouton like (simplifié)
+  - Pas de sous-commentaires (on évite l'imbrication infinie)
+  - Bouton supprimer si auteur ou admin
+  C'est une décision de design : les commentaires sont "plats", pas imbriqués.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/ReportButton.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Bouton de signalement avec formulaire de sélection du motif.
+
+Cliquer sur "Signaler" affiche un menu déroulant avec des motifs prédéfinis.
+Après envoi, le bouton devient le texte "Signalé" (état définitif).
+Si l'utilisateur a déjà signalé le message, le serveur retourne 409
+et un message d'erreur est affiché.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/MessagesPrives.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Interface de messagerie privée style "chat".
+
+CONSTRUCTION DES CONVERSATIONS :
+  On récupère tous les messages privés de l'utilisateur (envoyés ET reçus).
+  On en extrait la liste des interlocuteurs (Set pour éviter les doublons).
+  En sélectionnant un interlocuteur, on filtre les messages pour n'afficher
+  que ceux échangés entre eux deux.
+
+STYLE "BULLES" :
+  - mp-mine → bulle bleue à droite (messages envoyés par l'utilisateur)
+  - mp-other → bulle grise à gauche (messages reçus)
+  → Comme WhatsApp/Messenger
+
+NOUVELLE CONVERSATION :
+  Un champ de texte permet d'entrer le login d'un nouveau destinataire.
+  Après envoi, la conversation apparaît dans la liste.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/Recherche.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Moteur de recherche avec 4 critères cumulables.
+
+CRITÈRES : mots-clés, auteur, date début, date fin
+→ Tous sont optionnels et se cumulent (ET logique côté serveur)
+→ Ex : chercher "réunion" écrit par "admin" en janvier → tous les filtres actifs
+
+CONSTRUCTION DE L'URL :
+  const params = new URLSearchParams();
+  if (q) params.append('q', q);
+  ...
+  api.get(`/messages/search?${params.toString()}`)
+  → URLSearchParams gère automatiquement l'encodage des caractères spéciaux
+
+AFFICHAGE DES RÉSULTATS :
+  Réutilise MessageList → pas de duplication de code d'affichage.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/Profile.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Page de profil de l'utilisateur connecté.
+
+Affiche :
+  1. La carte utilisateur (composant User)
+  2. Tous les messages publiés par l'utilisateur dans les forums
+
+L'utilisateur peut supprimer ses propres messages depuis son profil.
+La liste réutilise MessageList → cohérence visuelle avec le forum.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/components/ValidationInscription.jsx
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Interface admin pour valider ou refuser les inscriptions en attente.
+
+N'est accessible et utile que pour les administrateurs.
+Récupère GET /api/users/pending → liste des comptes en attente.
+
+Pour chaque utilisateur :
+  - Bouton vert "Valider" → PUT /api/users/:id/validate → status: 'active'
+  - Bouton rouge "Refuser" → PUT /api/users/:id/refuse → status: 'refused'
+  - Après l'action, l'utilisateur disparaît de la liste (filter côté client)
+
+DOUBLE VÉRIFICATION CÔTÉ CLIENT :
+  if (!user.isAdmin) return <erreur> → même si l'URL était accessible,
+  le composant ne fait rien pour un non-admin.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FICHIER : client/src/index.css
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RÔLE : Styles globaux de toute l'application.
+
+Contient les styles de TOUS les composants dans un seul fichier CSS.
+Organisation en sections commentées pour trouver facilement :
+  - Reset / Base
+  - Navigation Header
+  - Boutons
+  - Layout Home
+  - Sidebar / UserBanner
+  - User Card
+  - Admin Badge
+  - Messages
+  - Like / Report / Comments
+  - Formulaires
+  - Auth / Signup
+  - Messages Privés
+  - Recherche
+  - Validation
+  - États (loading, error, success)
+  - Responsive (mobile)
+
+DESIGN GÉNÉRAL :
+  - Couleur principale : bleu foncé #1a3a5c (professionnel, associatif)
+  - Accent : bleu #2d7dd2 (boutons, liens)
+  - Alerte : rouge #e63946 (badges admin, erreurs, refus)
+  - Fond : gris clair #f0f2f5 (standard pour les apps web)
+  - Layout responsive avec @media (max-width: 768px) pour mobile
+
+
+════════════════════════════════════════════════════════════════════════════════
+              RÉSUMÉ : GRAPHE DES DÉPENDANCES ENTRE COMPOSANTS
+════════════════════════════════════════════════════════════════════════════════
+
+App
+├── NavigationPanel
+│   └── Logout
+├── ForumPublic (si non connecté)
+├── Login (si vue=login)
+├── Signup (si vue=signup)
+├── SignupInProgress (si vue=pending)
+│   └── Logout
+└── Home (si connecté)
+    ├── UserBanner
+    │   └── User
+    │       └── AdminBadge
+    ├── Forum (ouvert / fermé)
+    │   ├── MessageForm
+    │   └── MessageList
+    │       └── Message
+    │           ├── AdminBadge
+    │           ├── LikeButton
+    │           ├── ReportButton
+    │           └── CommentList
+    │               ├── Comment
+    │               │   └── AdminBadge
+    │               └── MessageForm
+    ├── MessagesPrives
+    ├── Recherche
+    │   └── MessageList (réutilisé)
+    ├── Profile
+    │   ├── User (réutilisé)
+    │   └── MessageList (réutilisé)
+    └── ValidationInscription
+
+
+════════════════════════════════════════════════════════════════════════════════
+              RÉSUMÉ : CONFORMITÉ AVEC LES EXIGENCES DU COURS LU3IN017
+════════════════════════════════════════════════════════════════════════════════
+
+✓ React (SPA) → Toute l'interface est en React avec composants JSX
+✓ Axios → Utilisé pour tous les appels HTTP (avec instance configurée)
+✓ Express → Serveur backend avec routeur Express
+✓ MongoDB driver natif → PAS de Mongoose, uniquement require('mongodb')
+✓ Sessions → express-session avec cookies
+✓ CommonJS (require) côté serveur → conforme aux exemples du cours
+✓ ESM (import) côté client → standard moderne pour React/Vite
+✓ CORS configuré → communication client/serveur sur ports différents
+✓ Opérations MongoDB vues en cours : findOne, find, insertOne, updateOne,
+  deleteMany, $set, $push, $pull, $or, $gte, $lte, $regex, countDocuments
+
+================================================================================
